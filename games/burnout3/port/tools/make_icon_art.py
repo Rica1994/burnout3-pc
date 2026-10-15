@@ -5,9 +5,11 @@ a sheen across the top and a soft shadow. Each size is drawn from the shapes
 (eight times larger, then reduced), not shrunk from the largest.
 
 Written to port/icon.ico (the executable carries it: engine/host's
-ps2_add_port) and, with --preview, a PNG of every size.
+ps2_add_port) and, with --preview, a PNG of every size. With --ios, only the
+iPad app's icon: port/ios_icon.png, 1024 x 1024 and opaque (iOS draws the
+rounded corners), the letters on a dark ground.
 
-    python games/burnout3/port/tools/make_icon_art.py [--preview out.png]
+    python games/burnout3/port/tools/make_icon_art.py [--preview out.png] [--ios]
 """
 
 import argparse
@@ -132,9 +134,25 @@ def write_ico(images, path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--preview", help="also write a PNG of every size, on a light and a dark ground")
+    parser.add_argument("--ios", action="store_true", help="write port/ios_icon.png (the iPad app's) instead")
     args = parser.parse_args()
-    images = [draw(size) for size in SIZES]
     here = os.path.dirname(os.path.abspath(__file__))
+    if args.ios:
+        global SUPER
+        SUPER = 2                                   # 1024 is large enough to need little more
+        letters = draw(1024).resize((820, 820), Image.LANCZOS)
+        ground = Image.new("RGBA", (1024, 1024))
+        top, bottom = (44, 50, 62), (14, 16, 22)
+        pixels = ground.load()
+        for y in range(1024):
+            t = y / 1023
+            colour = tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)) + (255,)
+            for x in range(1024):
+                pixels[x, y] = colour
+        ground.alpha_composite(letters, (102, 102))
+        ground.convert("RGB").save(os.path.join(here, "..", "ios_icon.png"))
+        return
+    images = [draw(size) for size in SIZES]
     write_ico(images, os.path.join(here, "..", "icon.ico"))
     if args.preview:
         width = sum(SIZES) + 10 * len(SIZES) + 10

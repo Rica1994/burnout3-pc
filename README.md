@@ -91,7 +91,7 @@ workflow it follows is in the engine's skills (`engine/.claude/skills`).
   force feedback.
 - Graphical mods and options (beyond texture packs).
 - Better performance on slower machines.
-- Linux, macOS and Android ports.
+- macOS and Android ports (Linux builds from source; iPad: below).
 
 ## Building it
 
@@ -124,6 +124,22 @@ and Ninja) and Python 3.10+ (Pillow for the art scripts). See the engine's
 [docs/PORTING.md](https://github.com/danielgomesvieira2000/ps2-port-engine/blob/master/docs/PORTING.md)
 for every option of the port, and its skills (`engine/.claude/skills`) for the
 workflow Claude Code follows here.
+
+## On an iPad
+
+The same port builds for iPadOS, on a Mac with Xcode: the game's code
+generated from your disc as above (`port.py ... generate` instead of
+`build`), then
+
+```sh
+engine/tools/ios_setup.sh --game games/burnout3 --team <your team ID> --bundle-id com.<you>.burnout3
+```
+
+and Run in Xcode. The disc image goes into the app's folder with the Files
+app; it plays with a controller or the on-screen touch controls. Everything
+step by step: the engine's [docs/IOS.md](https://github.com/danielgomesvieira2000/ps2-port-engine/blob/master/docs/IOS.md).
+The iPad app's icon is the port's own art (`port/ios_icon.png`, from
+`port/tools/make_icon_art.py --ios`).
 
 ## What is where
 
