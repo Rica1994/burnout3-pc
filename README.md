@@ -137,9 +137,47 @@ engine/tools/ios_setup.sh --game games/burnout3 --team <your team ID> --bundle-i
 
 and Run in Xcode. The disc image goes into the app's folder with the Files
 app; it plays with a controller or the on-screen touch controls. Everything
-step by step: the engine's [docs/IOS.md](https://github.com/danielgomesvieira2000/ps2-port-engine/blob/master/docs/IOS.md).
+step by step: the engine's [docs/IOS.md](https://github.com/Rica1994/ps2-port-engine/blob/ios-port/docs/IOS.md).
 The iPad app's icon is the port's own art (`port/ios_icon.png`, from
 `port/tools/make_icon_art.py --ios`).
+
+### The iPad work on two machines (this fork)
+
+The iPad work lives on the `ios-port` branch of two forks: this repository
+(`Rica1994/burnout3-pc`) and its `engine/` submodule
+(`Rica1994/ps2-port-engine`). Daniel's repositories are the `upstream`
+remotes. A Windows PC does the heavy work (generating the game's code, the
+Windows build, the regression pictures); a Mac builds and runs the iPad app.
+Git carries only the sources. The disc image, `extracted/`, `build/` and the
+game's generated C++ (`games/*/src/`) stay on each machine (`.gitignore`).
+
+Once, on each machine:
+
+```sh
+git clone --recursive -b ios-port https://github.com/Rica1994/burnout3-pc
+cd burnout3-pc/engine && git checkout ios-port && cd ..
+git remote add upstream https://github.com/danielgomesvieira2000/burnout3-pc
+git -C engine remote add upstream https://github.com/danielgomesvieira2000/ps2-port-engine
+```
+
+The PC also generates the game's code from the disc ("Building it" above).
+The Mac either does the same (Python only, ~40 min) or unpacks the PC's
+generated code: the PC's packing step writes `burnout3-for-mac.zip`.
+
+Every change:
+
+1. **PC:** edit, build, run the tests and the regression pictures. Commit
+   the engine first, push it (`git -C engine push`), then commit the new
+   engine pointer in this repository and push.
+2. **Mac:** `git pull && git submodule update`. Unpack the generated code
+   again only when it changed (new VU programs, a new lift). If files were
+   added or removed or a CMakeLists changed, run `cmake build-ios/burnout3`.
+   Then Run in Xcode.
+3. **iPad:** send back the run's `burnout3-<date>-<time>.log` (Files > On My
+   iPad > Burnout 3).
+
+Daniel's updates: `git fetch upstream` in both repositories, then merge
+`upstream/master` into `ios-port`.
 
 ## What is where
 

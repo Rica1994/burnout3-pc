@@ -1,0 +1,2 @@
+# Functions MSVC's optimiser does not finish (engine/tools/lift.py: MSVC_SLOW).
+0x004C3760
