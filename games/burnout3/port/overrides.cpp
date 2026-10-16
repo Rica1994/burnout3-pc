@@ -636,12 +636,14 @@ void RegisterGameIopServers();     // iop_servers.cpp
 void RegisterWidescreen();         // widescreen.cpp
 void RegisterMouse();              // mouse.cpp
 void RegisterControls();           // controls.cpp
+void RegisterFrameSkip();          // frame_skip.cpp
 
 void RegisterGameOverrides() {
     RegisterGameIopServers();
     RegisterWidescreen();
     RegisterMouse();
     RegisterControls();
+    RegisterFrameSkip();
     using namespace ps2host::mc2;
     ps2host::Override(0x00244218, CardOr<GetInfo, F_00244218>, "libmc2 GetInfo (host card)");
     ps2host::Override(0x002445D0, CardOr<Format, F_002445D0>, "libmc2 Format (host card)");
