@@ -8,15 +8,17 @@
  *
  *   CAR REFLECTIONS - 0x002274B0, the cars' paint reflections (an environment
  *   map drawn each frame): without it the bodywork only loses its shine
- *   (1.2% of the picture's pixels change) while an A12's GPU time for a race
- *   picture falls from ~40 ms to ~22 ms.
+ *   (0.5-1.2% of the picture's pixels change). It saves little: in a
+ *   frame-exact race (lavapipe, frames 17700-18290) the same ~2,100 draws and
+ *   ~250 passes a picture, the passes' area 37.7 -> 37.1 MP (-1.6%). (An A12's
+ *   40 -> 22 ms GPU time in one 8 s window was noise.) On by default.
  *
  *   (Not a draw distance: the race sets RenderWare's far clip plane to 10,000
  *   units - in effect none - from derived code that calls it directly, and
  *   the track's own sectors decide what is drawn; scaling it changed nothing.)
  *
- * "car_reflections" in pc_settings.ini (on/off; off by default on a tablet,
- * on elsewhere; PS2HOST_CAR_REFLECTIONS=0/1 for a run).
+ * "car_reflections" in pc_settings.ini (on/off, on by default;
+ * PS2HOST_CAR_REFLECTIONS=0/1 for a run).
  */
 
 #include <cstdio>
@@ -33,7 +35,7 @@ namespace {
 bool CarReflections() {
     static const bool on = [] {
         const char* v = std::getenv("PS2HOST_CAR_REFLECTIONS");
-        const bool wanted = v && *v ? *v != '0' : ps2host::SettingOn("car_reflections", !ps2host::platform::kMobile);
+        const bool wanted = v && *v ? *v != '0' : ps2host::SettingOn("car_reflections", true);
         std::fprintf(stderr, "[lite graphics] car reflections %s\n", wanted ? "on" : "off");
         return wanted;
     }();
@@ -48,5 +50,5 @@ void Reflections(lifted::Context& c) {
 }  // namespace
 
 void RegisterLiteGraphics() {
-    ps2host::Override(0x002274B0u, Reflections, "the cars' paint reflections: CAR REFLECTIONS (off on a tablet)");
+    ps2host::Override(0x002274B0u, Reflections, "the cars' paint reflections: CAR REFLECTIONS (a setting)");
 }
