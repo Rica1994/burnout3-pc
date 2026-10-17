@@ -21,6 +21,7 @@
  * PS2HOST_CAR_REFLECTIONS=0/1 for a run).
  */
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -29,6 +30,7 @@
 #include "ps2host/settings.h"
 
 void F_002274B0(lifted::Context& c);        // the cars' paint reflections
+void F_0026A710(lifted::Context& c);        // an object put into a view (0 the race's, 1-3 the reflection map's)
 
 namespace {
 
@@ -47,8 +49,23 @@ void Reflections(lifted::Context& c) {
     else c.r[2] = 0;
 }
 
+/* The track drawn into the reflection map's three small views (FBP 0x18B,
+   0x193, 0x19B, 128 wide, put together in 0x16B for the cars' paint): the
+   world's objects are put into views 1-3 one by one here (0x0021C780), each
+   right after the race's own view - three more renders of the track, and a
+   render pass to and fro for each object. Without reflections, not done. */
+void ReflectionViews(lifted::Context& c) {
+    const std::uint64_t view = c.r[5];
+    if (!CarReflections() && view >= 1 && view <= 3) {
+        c.r[2] = 0;
+        return;
+    }
+    F_0026A710(c);
+}
+
 }  // namespace
 
 void RegisterLiteGraphics() {
     ps2host::Override(0x002274B0u, Reflections, "the cars' paint reflections: CAR REFLECTIONS (a setting)");
+    ps2host::Override(0x0026A710u, ReflectionViews, "an object put into a view: the reflection map's views with CAR REFLECTIONS");
 }
