@@ -19,7 +19,12 @@
  * the last one drawn is still on its way - not yet done by the GS thread or
  * the GPU (GsFrameDone, GpuFrameDone): drawing goes as fast as the GPU
  * finishes pictures, no faster (a queue of pictures would only add delay).
- * PS2HOST_FRAMESKIP_LAG_ONLY=1: by the lag alone, as before.
+ * Measured on the A12 (17 Oct, 18:19): no better - 123-157 race pictures in
+ * 10 s against 150, a dip to 70% speed, presents less even. The GPU is ~80%
+ * busy at one picture in four with ~43 ms a picture, and seen only at frame
+ * ends a picture done is drawn again a step late: the GPU idles between
+ * pictures. So by the lag alone by default, as before;
+ * PS2HOST_FRAMESKIP_GPU=1 for the leaking lag and the GPU's pace.
  *
  * On by default on a tablet; "frame_skip" in pc_settings.ini (on/off) or
  * PS2HOST_FRAMESKIP=0/1 (a scripted run's --frameskip=0/1) turns it.
@@ -64,8 +69,8 @@ void RaceDraw(lifted::Context& c) {
     static double lag = 0.0;
     static std::uint64_t drawn_frame = 0;      // the frame the last drawn step's picture went in
     static const bool lag_only = [] {
-        const char* v = std::getenv("PS2HOST_FRAMESKIP_LAG_ONLY");
-        return v && *v && *v != '0';
+        const char* v = std::getenv("PS2HOST_FRAMESKIP_GPU");
+        return !(v && *v && *v != '0');
     }();
     static int in_a_row = 0;
     static unsigned drawn = 0, skipped = 0;
