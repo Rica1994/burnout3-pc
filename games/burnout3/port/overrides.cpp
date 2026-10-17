@@ -45,6 +45,7 @@ void F_0019A950(lifted::Context& c);
 void F_001F2408(lifted::Context& c);
 // The frame's post effects: glow and speed blur (see PostEffects).
 void F_002FA9A0(lifted::Context& c);
+void F_002659C0(lifted::Context& c);        // the depth effect (with BLUR)
 void F_001322B0(lifted::Context& c);
 // The frontend: its string lookup, the main menu's input, a message box.
 void F_00271A00(lifted::Context& c);
@@ -150,6 +151,19 @@ const char* BlurDefault() { return ps2host::platform::kMobile ? "off" : "origina
 void PostEffects(lifted::Context& c) {
     if (ps2host::Setting("blur", BlurDefault()) == "off") return;
     F_002FA9A0(c);
+}
+
+/* The 3D scene's depth effect (0x002659C0, from 0x00276300; the game runs it
+   while 0x00665F28 is set): the frame's depth turned into colour through
+   views of one memory in two formats - 32-bit colour at 0xD2, 24-bit depth
+   one page on - in 128-wide strips, then gathered at 0xEE. Each step is an
+   image written back to memory and another loaded from it: on an A12 iPad,
+   with the glow's, about half the GPU's time in a race (swizzles 26-30%,
+   decodes 25-30%: race.args, PS2HOST_GPU_PROFILE). Nothing of it shows in a
+   race's pictures at the start; left out with BLUR OFF. */
+void DepthEffect(lifted::Context& c) {
+    if (ps2host::Setting("blur", BlurDefault()) == "off") return;
+    F_002659C0(c);
 }
 
 /* A function that may wait in an idle loop: in real time the wait sleeps
@@ -669,6 +683,7 @@ void RegisterGameOverrides() {
     ps2host::AddIdleLoop(0x001F24E0u);
     ps2host::Override(0x001F2408u, WaitsForInterrupt<F_001F2408>, "RenderWare's packet wait: asleep in real time");
     ps2host::Override(0x002FA9A0u, PostEffects, "the frame's speed blur and glow: BLUR (PC SETTINGS)");
+    ps2host::Override(0x002659C0u, DepthEffect, "the 3D scene's depth effect: left out with BLUR OFF");
     ps2host::Override(0x001156C0u, KernelStore, "kernel-mode store");
     ps2host::Override(0x0010D3E8u, TtyWrite, "TTY write (printf)");
     ps2host::Override(0x001313C0u, SkipMovie, "a movie screen's update: Start skips the movie");
