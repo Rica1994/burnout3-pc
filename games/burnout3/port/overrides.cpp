@@ -21,6 +21,7 @@
 
 #include "ps2host/host.h"
 #include "ps2host/mc2.h"
+#include "ps2host/platform.h"
 #include "ps2host/run.h"
 #include "ps2host/settings.h"
 
@@ -140,8 +141,14 @@ void SkipMovie(lifted::Context& c) {
    (glow) and a radial speed blur gathered there over frames, the buffer laid
    over the whole frame (0x002F9F50). At 320x224 that layer softens the
    picture at any internal resolution. BLUR OFF leaves the frame as drawn. */
+/* Off by default on a tablet: on an A12 iPad the glow's passes - the frame
+   bounced through 64-320-wide views, a feedback copy each - were a third of
+   a race picture's render passes (lavapipe, race.args frame 17,800: 444 ->
+   240 feedback copies an interval without it). */
+const char* BlurDefault() { return ps2host::platform::kMobile ? "off" : "original"; }
+
 void PostEffects(lifted::Context& c) {
-    if (ps2host::Setting("blur", "original") == "off") return;
+    if (ps2host::Setting("blur", BlurDefault()) == "off") return;
     F_002FA9A0(c);
 }
 
@@ -277,7 +284,7 @@ int Resolution() {
     return 0;
 }
 void SetResolution(int which) { ps2host::SetSetting("resolution", kResolutions[which]); }
-int Blur() { return ps2host::Setting("blur", "original") == "off" ? 1 : 0; }
+int Blur() { return ps2host::Setting("blur", BlurDefault()) == "off" ? 1 : 0; }
 void SetBlur(int off) { ps2host::SetSetting("blur", off ? "off" : "original"); }
 const char* const kAspects[] = {"4:3", "16:9", "auto"};
 int Aspect() {
