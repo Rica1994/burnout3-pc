@@ -12,12 +12,22 @@
  * fourth step - and the window shows the last picture drawn
  * (NoteDrawLeftOut) rather than a frame buffer nobody drew this step.
  *
+ * The lag leaks away (x0.9 a step): the game keeps to the vertical blank, so
+ * at full speed steps come exactly 1/60 s apart and a lag once over a step
+ * never went down again - an A12 iPad's race drew one step in four, 15 fps,
+ * with its GPU 65% busy and the EE 60% idle. And a step is left out too while
+ * the last one drawn is still on its way - not yet done by the GS thread or
+ * the GPU (GsFrameDone, GpuFrameDone): drawing goes as fast as the GPU
+ * finishes pictures, no faster (a queue of pictures would only add delay).
+ * PS2HOST_FRAMESKIP_LAG_ONLY=1: by the lag alone, as before.
+ *
  * On by default on a tablet; "frame_skip" in pc_settings.ini (on/off) or
  * PS2HOST_FRAMESKIP=0/1 (a scripted run's --frameskip=0/1) turns it.
  */
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 
@@ -52,6 +62,11 @@ void RaceDraw(lifted::Context& c) {
     }
     static Clock::time_point last{};
     static double lag = 0.0;
+    static std::uint64_t drawn_frame = 0;      // the frame the last drawn step's picture went in
+    static const bool lag_only = [] {
+        const char* v = std::getenv("PS2HOST_FRAMESKIP_LAG_ONLY");
+        return v && *v && *v != '0';
+    }();
     static int in_a_row = 0;
     static unsigned drawn = 0, skipped = 0;
     static Clock::time_point reported = Clock::now();
@@ -60,8 +75,14 @@ void RaceDraw(lifted::Context& c) {
     last = now;
     // A gap (a pause, a menu, loading): start again on time.
     if (step > 0.5) lag = 0.0;
-    else lag = std::clamp(lag + step - kStep, 0.0, 4 * kStep);
-    const bool skip = lag > kStep && in_a_row < kMostSkipped;
+    else if (lag_only) lag = std::clamp(lag + step - kStep, 0.0, 4 * kStep);
+    else lag = std::clamp(lag * 0.9 + step - kStep, 0.0, 4 * kStep);
+    // This step's picture goes in the frame after the last one ended.
+    const std::uint64_t frame = ps2host::LastFrame() + 1;
+    const std::uint64_t gpu_done = ps2host::GpuFrameDone();
+    const bool on_its_way = !lag_only && drawn_frame &&
+                            (ps2host::GsFrameDone() < drawn_frame || (gpu_done && gpu_done < drawn_frame));
+    const bool skip = (lag > kStep || on_its_way) && in_a_row < kMostSkipped;
     if (skip) {
         ++in_a_row;
         ++skipped;
@@ -69,6 +90,7 @@ void RaceDraw(lifted::Context& c) {
     } else {
         in_a_row = 0;
         ++drawn;
+        drawn_frame = frame;
         F_00134A20(c);
     }
     if (std::chrono::duration<double>(now - reported).count() >= 10.0) {
