@@ -137,6 +137,7 @@ struct Pacer {
 };
 
 void RaceDraw(lifted::Context& c) {
+    ps2host::InputAnchor();                   // an input recording's race start (dbc.cpp)
     if (!Enabled()) {
         F_00134A20(c);
         return;
