@@ -23,8 +23,10 @@
  * 10 s against 150, a dip to 70% speed, presents less even. The GPU is ~80%
  * busy at one picture in four with ~43 ms a picture, and seen only at frame
  * ends a picture done is drawn again a step late: the GPU idles between
- * pictures. So by the lag alone by default, as before;
- * PS2HOST_FRAMESKIP_GPU=1 for the leaking lag and the GPU's pace.
+ * pictures. Since 18 Oct the default is paced by the GPU's measured cost
+ * per picture instead (Pacer, below); PS2HOST_FRAMESKIP_MODE=lag is the lag
+ * alone as before, =gpu (or PS2HOST_FRAMESKIP_GPU=1) the leaking lag and the
+ * GPU's pace.
  *
  * On by default on a tablet; "frame_skip" in pc_settings.ini (on/off) or
  * PS2HOST_FRAMESKIP=0/1 (a scripted run's --frameskip=0/1) turns it.
@@ -35,6 +37,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 #include "ps2host/host.h"
 #include "ps2host/platform.h"
@@ -60,34 +63,123 @@ bool Enabled() {
     return on;
 }
 
+/* The paced way (the default): a picture every N steps, N chosen from what a
+   picture costs the GPU (its timestamps, GpuBusyNs) - the smallest N whose
+   N/60 s holds it with room to spare. The lag alone never comes down at full
+   speed (above): an A12's race stayed at one in four, 15 fps, with its GPU
+   ~43 ms a picture and so only ~65% busy - one in three (20 fps, 50 ms) holds
+   that. Unlike waiting for the GPU to be done (PS2HOST_FRAMESKIP_GPU), a
+   picture is not held back while the one before it is still on the GPU: one
+   picture queued behind another keeps the GPU busy rather than idle between
+   them, and ~43 ms of work in each 50 ms gap fits. As the GPU gets cheaper
+   (fewer passes, less to decode), N comes down by itself: under ~29 ms a
+   picture, one in two - 30 fps. The lag guards it: a game falling behind real
+   time (the GPU or the GS thread slower than measured: a crash, traffic) goes
+   up a step at once and stays there a while. */
+struct Pacer {
+    int n = kMostSkipped + 1;           // a picture every n steps
+    double cost_ms = 0.0;               // a picture's GPU time, averaged
+    std::uint64_t window_gpu = 0;
+    unsigned window_drawn = 0, fits_lower = 0;
+    double hold_until = 0.0;            // seconds: no step down before
+    double lag = 0.0;
+
+    static int StepsFor(double ms) {
+        // Room: 12% and a millisecond (the GS thread's own end of a frame,
+        // presenting, a picture costing more than the average).
+        const double need = ms * 1.12 + 1.0;
+        for (int n = 1; n <= kMostSkipped + 1; ++n)
+            if (n * kStep * 1000.0 >= need) return n;
+        return kMostSkipped + 1;
+    }
+    // At each drawn picture.
+    void Drawn(double now) {
+        const std::uint64_t gpu = ps2host::GpuBusyNs();
+        if (ps2host::GpuProfilingNow()) {       // (its time a little high: not counted)
+            window_drawn = 0;
+            return;
+        }
+        if (!window_drawn) window_gpu = gpu;
+        if (++window_drawn < 8) return;
+        // 8 pictures (about half a second): their GPU time, the left-out
+        // steps' between them counted with them (they are its cost too).
+        const double ms = double(gpu - window_gpu) / 1e6 / double(window_drawn - 1);
+        window_drawn = 0;
+        if (gpu <= window_gpu) return;          // no timestamps yet
+        cost_ms = cost_ms == 0.0 ? ms : cost_ms * 0.6 + ms * 0.4;
+        const int want = StepsFor(cost_ms);
+        if (want > n) {
+            n = want;
+            fits_lower = 0;
+        } else if (want < n && now >= hold_until) {
+            // Down a step only once it has fitted for three windows running.
+            if (++fits_lower >= 3) {
+                --n;
+                fits_lower = 0;
+            }
+        } else {
+            fits_lower = 0;
+        }
+    }
+    // At each step: the game's lag behind real time.
+    void Step(double step, double now) {
+        lag = std::clamp(lag * 0.95 + step - kStep, 0.0, 8 * kStep);
+        if (lag > 2 * kStep && n <= kMostSkipped) {
+            ++n;
+            lag = 0.0;
+            fits_lower = 0;
+            hold_until = now + 2.0;
+        }
+    }
+};
+
 void RaceDraw(lifted::Context& c) {
     if (!Enabled()) {
         F_00134A20(c);
         return;
     }
     static Clock::time_point last{};
+    static const Clock::time_point start = Clock::now();
     static double lag = 0.0;
     static std::uint64_t drawn_frame = 0;      // the frame the last drawn step's picture went in
-    static const bool lag_only = [] {
-        const char* v = std::getenv("PS2HOST_FRAMESKIP_GPU");
-        return !(v && *v && *v != '0');
+    // PS2HOST_FRAMESKIP_MODE: paced (the default), lag (by the lag alone, as
+    // before 18 Oct), gpu (the lag leaking and the GPU's pace; also
+    // PS2HOST_FRAMESKIP_GPU=1).
+    enum Mode { kPaced, kLag, kGpu };
+    static const Mode mode = [] {
+        const char* gpu = std::getenv("PS2HOST_FRAMESKIP_GPU");
+        if (gpu && *gpu && *gpu != '0') return kGpu;
+        const char* m = std::getenv("PS2HOST_FRAMESKIP_MODE");
+        const std::string v = m ? m : "";
+        if (v == "lag") return kLag;
+        if (v == "gpu") return kGpu;
+        return kPaced;
     }();
+    static Pacer pacer;
     static int in_a_row = 0;
     static unsigned drawn = 0, skipped = 0;
     static Clock::time_point reported = Clock::now();
     const Clock::time_point now = Clock::now();
+    const double seconds = std::chrono::duration<double>(now - start).count();
     const double step = last == Clock::time_point{} ? kStep : std::chrono::duration<double>(now - last).count();
     last = now;
-    // A gap (a pause, a menu, loading): start again on time.
-    if (step > 0.5) lag = 0.0;
-    else if (lag_only) lag = std::clamp(lag + step - kStep, 0.0, 4 * kStep);
-    else lag = std::clamp(lag * 0.9 + step - kStep, 0.0, 4 * kStep);
-    // This step's picture goes in the frame after the last one ended.
+    bool skip = false;
+    if (mode == kPaced && ps2host::GpuBusyNs() != 0) {
+        if (step > 0.5) pacer.lag = 0.0;            // a gap: a pause, a menu, loading
+        else pacer.Step(step, seconds);
+        skip = in_a_row + 1 < pacer.n && in_a_row < kMostSkipped;
+    } else {
+        // A gap (a pause, a menu, loading): start again on time.
+        if (step > 0.5) lag = 0.0;
+        else if (mode != kGpu) lag = std::clamp(lag + step - kStep, 0.0, 4 * kStep);
+        else lag = std::clamp(lag * 0.9 + step - kStep, 0.0, 4 * kStep);
+        // This step's picture goes in the frame after the last one ended.
+        const std::uint64_t gpu_done = ps2host::GpuFrameDone();
+        const bool on_its_way = mode == kGpu && drawn_frame &&
+                                (ps2host::GsFrameDone() < drawn_frame || (gpu_done && gpu_done < drawn_frame));
+        skip = (lag > kStep || on_its_way) && in_a_row < kMostSkipped;
+    }
     const std::uint64_t frame = ps2host::LastFrame() + 1;
-    const std::uint64_t gpu_done = ps2host::GpuFrameDone();
-    const bool on_its_way = !lag_only && drawn_frame &&
-                            (ps2host::GsFrameDone() < drawn_frame || (gpu_done && gpu_done < drawn_frame));
-    const bool skip = (lag > kStep || on_its_way) && in_a_row < kMostSkipped;
     if (skip) {
         ++in_a_row;
         ++skipped;
@@ -97,9 +189,14 @@ void RaceDraw(lifted::Context& c) {
         ++drawn;
         drawn_frame = frame;
         F_00134A20(c);
+        if (mode == kPaced) pacer.Drawn(seconds);
     }
     if (std::chrono::duration<double>(now - reported).count() >= 10.0) {
-        std::fprintf(stderr, "[frame skip] last 10 s: %u race pictures drawn, %u left out\n", drawn, skipped);
+        if (mode == kPaced)
+            std::fprintf(stderr, "[frame skip] last 10 s: %u race pictures drawn, %u left out; one in %d (GPU %.1f ms a picture)\n",
+                         drawn, skipped, pacer.n, pacer.cost_ms);
+        else
+            std::fprintf(stderr, "[frame skip] last 10 s: %u race pictures drawn, %u left out\n", drawn, skipped);
         drawn = skipped = 0;
         reported = now;
     }
