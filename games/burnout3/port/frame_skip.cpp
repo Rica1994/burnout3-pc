@@ -58,6 +58,11 @@ bool Enabled() {
         const bool wanted = v && *v ? *v != '0' : ps2host::SettingOn("frame_skip", ps2host::platform::kMobile);
         std::fprintf(stderr, "[frame skip] %s\n", wanted ? "on: the race's draw left out while it lags behind"
                                                          : "off");
+        // Each frame starts with the last picture copied whole into the 16-bit
+        // display buffer (20 sprites, 640x448, TEXA's alpha 0x80: a copy, not
+        // a mix): a frame not shown need not make its copy - on an A12 at 1x,
+        // 0.8 ms of GPU time in each of the two frames in three left out.
+        if (wanted) ps2host::SetDisplayCopyUnseen(true);
         return wanted;
     }();
     return on;
