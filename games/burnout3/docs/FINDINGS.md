@@ -1921,10 +1921,18 @@ than it needed to be, and one is the game's own pace:
   vertical blank (real time; an answer it sends wakes the EE): 8.7 s to
   6.4 s.
 * The phases go a step a frame. port/overrides.cpp's FastLoading wraps
-  0x0019A950: while it returns 0, vertical blanks come eight times as often
-  (SetFastForward; PS2HOST_LOAD_SPEED, 1 for the console's pace). The
-  loading screen is a still picture and a spinner. 6.4 s to 2.6 s (4x: 2.9,
-  16x: 2.5).
+  0x0019A950: while it returns 0, vertical blanks came eight times as often
+  (SetFastForward): 6.4 s to 2.6 s (4x: 2.9, 16x: 2.5) - but the loading
+  screen's spinner, and everything else timed by frames, went eight times as
+  fast with them. Since 2026-10-19 the step is taken again within the frame
+  instead (ps2host::RunIopBetweenSteps between steps: the IOP's slice, its
+  replies delivered), for up to half a frame or until the blank is due; the
+  blanks keep the console's pace. Real time, 1x blanks throughout: 6.34 s
+  (379 frames) -> 2.61 s (155 frames); phase 4 2.4 -> 1.37 s, 5 1.05 ->
+  0.68 s, 13 0.57 -> 0.40 s, 16 2.04 s -> 0.02 s. A quarter of a frame
+  gave 3.05 s, three quarters the same as half. PS2HOST_LOAD_SPEED=1: a
+  step a frame, as the console. The disc is not what is left (the drive 100
+  times as fast: the same).
 * What is left is mostly phase 4's audio streams, which fill as the sound
   plays (IOP thread 37, 16 KB at a time): faster only by running the sound
   faster. Shortening the IOP's DelayThread waits, or ending voices' release
@@ -1936,11 +1944,61 @@ the dispatch table 0x004B5C30). A run goes 0 -> 7 (the boot's load) -> 4 ->
 a race, 8 (the race taken down) -> 9 -> 4 -> 5. States 7 and 9 call
 0x001322B0 once a frame until it returns non-zero - the game's own load,
 the long one at boot: FastLoading wraps it too, and the boot's load went
-from 8.0 s to 2.1 s.
+from 8.0 s to 2.1 s (eight times the blanks); stepped within the frame, at
+the blanks' own pace, 5.9 s (350 frames) -> 2.35 s (138).
 
 The IOP's run in the EE's idle wait is a short slice (50,000 instructions):
 with the full one (20 million, so a busy IOP can't hang the EE) a module
 busy at boot kept the EE past vertical blanks - 77 lost in ten seconds.
+
+## A press to the screen: two frames the port added
+
+A player reported the controls felt late. Two frames of it were the port's,
+both found on 2026-10-19 and both gone in real time:
+
+* The pad's state went in a frame old. At each vertical blank the host
+  fills the pad block the game reads (dbc.cpp DbcFrame), then pumped the
+  window's events (SDL's controllers and keyboard) - so the block held what
+  the previous blank's pump had seen. The events are pumped first now
+  (devices.cpp FrameDone).
+* The picture went out a frame old. The game draws into 0x46, waits for
+  the blank, and only then copies the finished frame to the displayed buffer
+  (FBP 0) - inside the blanking interval, so on the console the very next
+  field shows it. The GS stream as the GS thread took it (a log of each
+  draw's target against the frames' ends, race in real time): `frame 18303
+  ends`, then the draws to 000, then 16B, 16A... (the next frame). The host
+  took the picture at the frame's end in the stream - before the copy - so
+  each one showed the frame before. In real time the copy comes well after
+  the blank's 1.43 ms (the EE first waits, in sceGsSyncPath, for VIF1's
+  worker and the GS thread to finish the frame), so no fixed time after the
+  blank works: the picture now waits, from the frame's end, for the stream
+  to move past the displayed buffer - the first draw to another target, or
+  the next frame's end (engine SetPresentAtBlankEnd; port/overrides.cpp opts
+  in). In the race: `frame 18069 ends`, draws to 000, draws to 16B, the
+  picture of 18069. Virtual time (the recorded runs) is as before.
+
+The race runs at 30 pictures a second (a picture every other blank: half
+the frames' ends have no drawing before the next), the menus at 60.
+
+## Splitscreen's 30 pictures a second, and the race's ticks
+
+Splitscreen played slower than the console with no picture dropped (the
+user's playtest, 2026-10-19). On the console it is a 30-pictures-a-second
+mode: with port/sixty_fps.cpp's overrides off (logged), the main loop asks
+for a picture every second blank at the race's start (0x001F4290(2) from
+0x00132200) - through the flag a crash's slow motion uses (+0x2DA65 asked,
++0x2DA66 followed), held for the whole race. Followed, it also makes the
+race go on two ticks a picture (0x00132F48: 0x00376570(.., 2, 8), not
+(.., 1, 4)). The "60 FPS Crashes" override never followed it, so the race
+went one tick a picture at every blank: right at 60 pictures a second, slow
+where the PC makes fewer - splitscreen's race made ~48 on the RTX at 2x, 40
+to 45 on the Intel UHD (the VIF1 transfers a second in --frame-times show
+it; the presents are 60 a second whatever is new). Now, where the game asks
+for half rate, a picture that took two blanks (counted in the vertical
+blank's handler, 0x001F1CE8, as it flips: its own count stops at the
+interval) is followed by two ticks: the Intel UHD's splitscreen 45 pictures
+and 58 ticks a second (45 and 45 before), the RTX 60 and 60. A picture of
+three blanks still gives two ticks, the most the game has.
 
 ## cvt.w.s saturates
 
@@ -2026,7 +2084,17 @@ and up is full throttle. The race's HUD (0x001A0790) is drawn only while
 racing - not paused, not in the menus' and intro's backdrops, which run the
 race's world (0x0019A550) too. Its hints naming R1 ("PRESS R1 BUTTON TO
 BOOST", "...HOLD THE R1 BUTTON FOR AFTERTOUCH") are language-file strings.
-The port's modern controls (port/controls.cpp) rest on this.
+The port's bindings (port/controls.cpp: racing and the menus apart, for
+the keyboard and the controller) rest on this.
+
+The button prompts are textures (named as PCSX2 packs name them, which the
+port overrides with art it draws, port/prompts.cpp): the frontend's face
+buttons with Start and Select (a 128 x 64 atlas: the marks, the ring they
+sit in, the START word), the D-pad's arms (32 x 16), L1/L2 and R1/R2 (64 x
+32 each), and the race's own R1 key, shown as a crash's IMPACT TIME (64 x
+32, adbaa8e56489a4b-99f532662aa4f3aa-00001593). The main menu's title
+(SELECT OPTION, 0x00319C80 with string 0xDE on 0x01E89518) is not a string
+the port can swap: its objects keep no string pointer.
 
 ## The mouse in the menus
 
@@ -2101,6 +2169,62 @@ SPU2 did that for any sweep), a race's mix clipped half of its samples - the
 crackle heard in races; swept as the hardware does (spu2.cpp's Level), they
 are silent, and the race's sound is clean but for a few loud moments.
 
+## Two players: the second controller port
+
+At boot the game opens a libdbc socket on each controller port (0 and 1) and
+on port 2 (DBC: socket 1 on port 1, its blocks at 0x004F51C0/0x004F5240;
+port 0's at 0x004F50C0, the pad the frontend's presses are asked of). With
+nothing on port 1, MULTIPLAYER greys RACE, ROAD RAGE, TEAM CRUSH and DOUBLE
+IMPACT: PARTY CRASH (pass the pad) alone is open. A DualShock 2 there opens
+them, as a second controller plugged in on the console does.
+
+The 2-player screens read their own player's port: P1 SELECT CAR port 0,
+P2 SELECT CAR port 1 alone (with port 1 present but pressed by nothing it
+never leaves). The mode list and P1's car choice read port 0 alone: with every
+device driving both ports in the menus a press still moves them once
+(`runs/splitscreen.args`: one Down, one Right). In the race each car is its
+port's.
+
+The port (overrides.cpp's MULTIPLAYER and PLAYERS pages, controls.cpp's
+SetPortsSplit): the players' devices are seated before the game's MULTIPLAYER
+opens; racing, each drives its own port alone; in every menu every device
+drives both - player 1's controls as in one-player games, and player 2's
+screens answering any. The main menu clears the seats.
+
+**Player 2's picture.** Both players draw into the picture's frame (FBP
+0x46, 640 wide): player 1 rows 0-224, player 2 rows 224-448. Player 2's post
+effects (the glow's threshold in alpha through a 16-bit view, its PSMT8H
+samples, the colour passes) address a frame based at FBP 0x8C - row 224 of
+0x46 - with their depth buffer at ZBP 0x118, row 224 of the race's at 0xD2.
+The GPU bridge took 0x8C for a buffer of its own and reconciled the two
+through local memory, at 1x: player 2's half lost the internal resolution.
+gpu_bridge.cpp's Containing now draws (and samples) such a buffer in the one
+it lies in, its rows (and its depth buffer's) further down - the same
+pixels at 1x (runs/splitscreen as recorded without the music), player 2 as
+sharp as player 1 at 2x.
+
+**No music.** The EA Trax update each frame (0x003F8C30, the player object
+0x01E7A888) stops the music (0x003FC470, `a1` 5) when the number of players
+(0x0064D3A0) is 2 or more: `slti $at, $v0, 2` at 0x003F8C54. The port's
+lift_mods.py has it 3 (always): two players hear the music, the song's banner
+at the race's start included; three or more (PARTY CRASH) as before.
+
+**Speed.** The game asks for a picture every blank in splitscreen too
+(0x001F4290 with 1, from the main loop at 0x00132D1C). Two views double the
+VU1 work and the GS thread's: in real time (i7-13620H, 2x) both run 95-100%
+busy, about 88,000 primitives a frame and 200 write-backs and reloads (the
+one-player race: 70,000 and 75), 76 of 3,000 pictures dropped. The speed
+blur's strips (D2/D3/E0 in the depth buffer's memory) are run per view: BLUR
+off drops 51.
+
+**Vertical splitscreen (MODS' SPLITSCREEN: VERTICAL).** The race's +0xF
+(see port/mods.cpp) puts the views side by side. Known issue, seen by the
+player and not yet looked into: parts of the HUD are drawn wrong with the
+views side by side. The game's own HUD layout for it (Nehalem's patch turns
+on a mode the shipped game never uses) and the port's widescreen HUD anchors
+(port/widescreen.cpp, laid out for one view, or two one above the other)
+are the first suspects.
+
 ## Open questions
 
 * Which compiler and flags produced this binary? Unresolved, and it blocks all
@@ -2108,5 +2232,7 @@ are silent, and the race's sound is clean but for a few loud moments.
 * Where exactly does code end and read-only data begin? The 81% figure is a
   lower bound - the traversal only marks bytes it can prove are reachable.
 * What is the `VDB.XML` container format?
+* Vertical splitscreen: which HUD elements break side by side, and whether
+  the game's layout or the port's widescreen anchors (see "Two players")?
 * How is the VU1 microcode stored and uploaded? 703 functions touch VU0 macro
   mode, but the VU1 microprograms are a separate problem and are not MIPS code.
