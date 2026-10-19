@@ -88,6 +88,10 @@ struct Pacer {
     unsigned window_drawn = 0, fits_lower = 0;
     double hold_until = 0.0;            // seconds: no step down before
     double lag = 0.0;
+    int wants_more = 0;                 // windows running that wanted more steps
+    // For the report: raises by cost and by lag, the costliest window.
+    unsigned raised = 0, lag_raised = 0;
+    double worst_ms = 0.0;
 
     static int StepsFor(double ms) {
         // Room: 12% and a millisecond (the GS thread's own end of a frame,
@@ -112,18 +116,31 @@ struct Pacer {
         window_drawn = 0;
         if (gpu <= window_gpu) return;          // no timestamps yet
         cost_ms = cost_ms == 0.0 ? ms : cost_ms * 0.6 + ms * 0.4;
+        worst_ms = std::max(worst_ms, ms);
         const int want = StepsFor(cost_ms);
+        // Up at once only for a lasting cost: a window two steps over, or two
+        // windows running over. On an A12 (19 Oct 20:50, 1x, cooked textures)
+        // pictures cost 17-21 ms - one in two with room - yet it sat at one in
+        // three half the time with the GPU 55% busy and no blank lost: single
+        // windows (a crash, a new area's textures) carried it up, and it took
+        // three windows to come down.
         if (want > n) {
-            n = want;
+            if (want > n + 1 || ++wants_more >= 2) {
+                n = want;
+                wants_more = 0;
+                ++raised;
+            }
             fits_lower = 0;
         } else if (want < n && now >= hold_until) {
-            // Down a step only once it has fitted for three windows running.
-            if (++fits_lower >= 3) {
+            wants_more = 0;
+            // Down a step once it has fitted for two windows running.
+            if (++fits_lower >= 2) {
                 --n;
                 fits_lower = 0;
             }
         } else {
             fits_lower = 0;
+            wants_more = 0;
         }
     }
     // At each step: the game's lag behind real time.
@@ -134,6 +151,7 @@ struct Pacer {
         lag = std::clamp(lag * 0.95 + step - kStep, 0.0, 8 * kStep);
         if (lag > 3 * kStep && n <= kMostSkipped) {
             ++n;
+            ++lag_raised;
             lag = 0.0;
             fits_lower = 0;
             hold_until = now + 1.0;
@@ -201,11 +219,15 @@ void RaceDraw(lifted::Context& c) {
         if (mode == kPaced) pacer.Drawn(seconds);
     }
     if (std::chrono::duration<double>(now - reported).count() >= 10.0) {
-        if (mode == kPaced)
-            std::fprintf(stderr, "[frame skip] last 10 s: %u race pictures drawn, %u left out; one in %d (GPU %.1f ms a picture)\n",
-                         drawn, skipped, pacer.n, pacer.cost_ms);
-        else
+        if (mode == kPaced) {
+            std::fprintf(stderr, "[frame skip] last 10 s: %u race pictures drawn, %u left out; one in %d (GPU %.1f ms a picture, "
+                                 "costliest window %.1f; raised %u by cost, %u by lag)\n",
+                         drawn, skipped, pacer.n, pacer.cost_ms, pacer.worst_ms, pacer.raised, pacer.lag_raised);
+            pacer.worst_ms = 0.0;
+            pacer.raised = pacer.lag_raised = 0;
+        } else {
             std::fprintf(stderr, "[frame skip] last 10 s: %u race pictures drawn, %u left out\n", drawn, skipped);
+        }
         drawn = skipped = 0;
         reported = now;
     }
