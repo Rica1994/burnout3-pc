@@ -144,15 +144,22 @@ struct Pacer {
         }
     }
     // At each step: the game's lag behind real time.
+    int behind = 0;                     // steps running the lag has been over three steps
     void Step(double step, double now) {
         // Three steps behind (a single long frame - a load, a crash's camera -
         // is not the GPU falling behind: on the iPad, 18 Oct 11:26, two steps
-        // and a 2 s hold left it at one in four a third of the time at 33 ms).
+        // and a 2 s hold left it at one in four a third of the time at 33 ms)
+        // - and staying so for ten steps: a stall of a few frames (a texture
+        // read, the asset cache's store) leaks away within them, and more
+        // steps skipped would not have helped it; a GPU or a CPU that cannot
+        // keep up keeps the lag there.
         lag = std::clamp(lag * 0.95 + step - kStep, 0.0, 8 * kStep);
-        if (lag > 3 * kStep && n <= kMostSkipped) {
+        behind = lag > 3 * kStep ? behind + 1 : 0;
+        if (behind >= 10 && n <= kMostSkipped) {
             ++n;
             ++lag_raised;
             lag = 0.0;
+            behind = 0;
             fits_lower = 0;
             hold_until = now + 1.0;
         }
